@@ -1,0 +1,167 @@
+name: Step 3
+
+on:
+  pull_request:
+    types:
+      - review_requested
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+env:
+  STEP_4_FILE: ".github/steps/4-step.md"
+
+jobs:
+  find_exercise:
+    name: 실습 이슈 찾기
+    uses: skills-kr/exercise-toolkit/.github/workflows/find-exercise-issue.yml@kr-v0.6.0
+
+  check_step_work:
+    name: 작업 확인
+    runs-on: ubuntu-latest
+    needs: [find_exercise]
+    env:
+      ISSUE_REPOSITORY: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ needs.find_exercise.outputs.issue-number }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 응답 템플릿 가져오기
+        uses: actions/checkout@v4
+        with:
+          repository: skills-kr/exercise-toolkit
+          path: exercise-toolkit
+          ref: kr-v0.6.0
+
+      - name: 마지막 댓글 찾기
+        id: find-last-comment
+        uses: peter-evans/find-comment@v3
+        with:
+          repository: ${{ env.ISSUE_REPOSITORY }}
+          issue-number: ${{ env.ISSUE_NUMBER }}
+          direction: last
+
+      - name: 댓글 업데이트 - 작업 확인 중
+        uses: GrantBirki/comment@v2.1.1
+        with:
+          repository: ${{ env.ISSUE_REPOSITORY }}
+          issue-number: ${{ env.ISSUE_NUMBER }}
+          comment-id: ${{ steps.find-last-comment.outputs.comment-id }}
+          file: exercise-toolkit/markdown-templates/step-feedback/checking-work.md
+          edit-mode: replace
+
+      - name: copilot-instructions.md 존재 확인
+        id: check-copilot-instructions
+        continue-on-error: true
+        uses: skills-kr/exercise-toolkit/actions/file-exists@kr-v0.6.0
+        with:
+          file: .github/copilot-instructions.md
+
+      - name: 프론트엔드 지침 파일 존재 확인
+        id: check-frontend-instructions
+        continue-on-error: true
+        uses: skills-kr/exercise-toolkit/actions/file-exists@kr-v0.6.0
+        with:
+          file: .github/instructions/frontend.instructions.md
+
+      - name: 백엔드 지침 파일 존재 확인
+        id: check-backend-instructions
+        continue-on-error: true
+        uses: skills-kr/exercise-toolkit/actions/file-exists@kr-v0.6.0
+        with:
+          file: .github/instructions/backend.instructions.md
+
+      - name: 댓글 업데이트 - 단계 결과
+        uses: GrantBirki/comment@v2.1.1
+        with:
+          repository: ${{ env.ISSUE_REPOSITORY }}
+          issue-number: ${{ env.ISSUE_NUMBER }}
+          comment-id: ${{ steps.find-last-comment.outputs.comment-id }}
+          edit-mode: replace
+          file: exercise-toolkit/markdown-templates/step-feedback/step-results-table.md
+          vars: |
+            step_number: 3
+            results_table:
+              - description: "Created copilot-instructions.md file"
+                passed: ${{ steps.check-copilot-instructions.outcome == 'success' }}
+              - description: "Created frontend-specific instructions file"
+                passed: ${{ steps.check-frontend-instructions.outcome == 'success' }}
+              - description: "Created backend-specific instructions file"
+                passed: ${{ steps.check-backend-instructions.outcome == 'success' }}
+
+      - name: 모든 확인 통과 여부 검사
+        if: contains(steps.*.outcome, 'failure')
+        run: exit 1
+
+  post_next_step_content:
+    name: 다음 단계 내용 게시
+    needs: [find_exercise, check_step_work]
+    runs-on: ubuntu-latest
+    env:
+      ISSUE_REPOSITORY: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ needs.find_exercise.outputs.issue-number }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 응답 템플릿 가져오기
+        uses: actions/checkout@v4
+        with:
+          repository: skills-kr/exercise-toolkit
+          path: exercise-toolkit
+          ref: kr-v0.6.0
+
+      - name: 댓글 생성 - 단계 완료
+        uses: GrantBirki/comment@v2.1.1
+        with:
+          repository: ${{ env.ISSUE_REPOSITORY }}
+          issue-number: ${{ env.ISSUE_NUMBER }}
+          file: exercise-toolkit/markdown-templates/step-feedback/step-finished-prepare-next-step.md
+          vars: |
+            next_step_number: 4
+
+      - name: 댓글 생성 - 단계 내용 추가
+        uses: GrantBirki/comment@v2.1.1
+        with:
+          repository: ${{ env.ISSUE_REPOSITORY }}
+          issue-number: ${{ env.ISSUE_NUMBER }}
+          file: ${{ env.STEP_4_FILE }}
+
+      - name: 댓글 생성 - 진행 상황 확인 중
+        uses: GrantBirki/comment@v2.1.1
+        with:
+          repository: ${{ env.ISSUE_REPOSITORY }}
+          issue-number: ${{ env.ISSUE_NUMBER }}
+          file: exercise-toolkit/markdown-templates/step-feedback/watching-for-progress.md
+
+      - name: 현재 워크플로우 비활성화 및 다음 워크플로우 활성화
+        run: |
+          gh workflow disable "${{github.workflow}}"
+          gh workflow enable "Step 4"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Workshop Tracker에 단계 보고
+        if: success()
+        continue-on-error: true
+        run: |
+          SESSION_ID=$(jq -r '.sessionId' .github/workshop-config.json)
+          TRACK=$(jq -r '.track' .github/workshop-config.json)
+          API_URL=$(jq -r '.apiUrl' .github/workshop-config.json)
+          curl -s -X POST "$API_URL" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "sessionId": "'"$SESSION_ID"'",
+              "type": "step",
+              "step": 3,
+              "description": "리뷰 커스터마이징",
+              "username": "'"$GITHUB_ACTOR"'",
+              "repo": "'"$GITHUB_REPOSITORY"'",
+              "track": "'"$TRACK"'",
+              "runId": "'"$GITHUB_RUN_ID"'"
+            }' || true
